@@ -1,2 +1,9 @@
 dist/
 node_modules/
+
+# Firebase config (contains sensitive API keys)
+crunchyroll-sync-extension/firebase-config.js
+
+# OS files
+.DS_Store
+Thumbs.db
