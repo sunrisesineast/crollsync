@@ -61,3 +61,4 @@ module.exports = {
   target: 'webworker',
   devtool: false
 };
+

@@ -12,7 +12,8 @@
   ],
   
   "host_permissions": [
-    "https://www.crunchyroll.com/*",
+    "https://*.crunchyroll.com/*",
+    "https://static.crunchyroll.com/*",
     "https://*.firebaseio.com/*",
     "https://*.firebaseapp.com/*",
     "https://www.gstatic.com/*",
@@ -25,9 +26,13 @@
   
   "content_scripts": [
     {
-      "matches": ["https://www.crunchyroll.com/*"],
+      "matches": [
+        "https://*.crunchyroll.com/*",
+        "https://static.crunchyroll.com/*"
+      ],
       "js": ["dist/content.js"],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true
     }
   ],
   

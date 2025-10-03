@@ -1,11 +1,13 @@
 // Content script for Crunchyroll Sync Extension
 
-console.log('Crunchyroll Sync: Content script loaded');
+console.log('Crunchyroll Sync: Content script loaded on', window.location.href);
 
 let videoElement = null;
 let isVideoHooked = false;
 let lastSeekTime = 0;
 const SEEK_THROTTLE_MS = 500;
+let isApplyingRemote = false;
+let recentlySentEvents = new Set(); // Track recently sent event timestamps to avoid loops
 
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
@@ -55,6 +57,13 @@ function initialize() {
       return true; // Keep message channel open for async response
     }
     
+    // Check if this is an event we recently sent (avoid feedback loop)
+    if (message.sentAtMs && recentlySentEvents.has(message.sentAtMs)) {
+      console.log('Crunchyroll Sync: Ignoring own event from', message.sentAtMs);
+      sendResponse({ success: true });
+      return;
+    }
+    
     // Handle video control messages
     switch (message.type) {
       case 'play':
@@ -97,28 +106,40 @@ function hookVideo(video) {
 
 function handleLocalPlay(event) {
   if (!videoElement) return;
+  if (isApplyingRemote) {
+    console.log('Crunchyroll Sync: Ignoring local play (applying remote)');
+    return;
+  }
   
   console.log('Crunchyroll Sync: Local play event');
   sendToBackground({
     type: 'play',
-    timestamp: videoElement.currentTime,
+    positionSec: videoElement.currentTime,
     url: window.location.href
   });
 }
 
 function handleLocalPause(event) {
   if (!videoElement) return;
+  if (isApplyingRemote) {
+    console.log('Crunchyroll Sync: Ignoring local pause (applying remote)');
+    return;
+  }
   
   console.log('Crunchyroll Sync: Local pause event');
   sendToBackground({
     type: 'pause',
-    timestamp: videoElement.currentTime,
+    positionSec: videoElement.currentTime,
     url: window.location.href
   });
 }
 
 function handleLocalSeek(event) {
   if (!videoElement) return;
+  if (isApplyingRemote) {
+    console.log('Crunchyroll Sync: Ignoring local seek (applying remote)');
+    return;
+  }
   
   const now = Date.now();
   if (now - lastSeekTime < SEEK_THROTTLE_MS) {
@@ -129,7 +150,7 @@ function handleLocalSeek(event) {
   console.log('Crunchyroll Sync: Local seek event to', videoElement.currentTime);
   sendToBackground({
     type: 'seek',
-    timestamp: videoElement.currentTime,
+    positionSec: videoElement.currentTime,
     url: window.location.href
   });
 }
@@ -143,9 +164,12 @@ function handleRemotePlay(message) {
   if (!videoElement) return;
   
   console.log('Crunchyroll Sync: Remote play command');
-  videoElement.currentTime = message.timestamp;
+  isApplyingRemote = true;
+  videoElement.currentTime = message.positionSec ?? message.timestamp ?? videoElement.currentTime;
   videoElement.play().catch(error => {
     console.error('Crunchyroll Sync: Error playing video:', error);
+  }).finally(() => {
+    setTimeout(() => { isApplyingRemote = false; }, 250);
   });
 }
 
@@ -153,35 +177,59 @@ function handleRemotePause(message) {
   if (!videoElement) return;
   
   console.log('Crunchyroll Sync: Remote pause command');
+  isApplyingRemote = true;
   videoElement.pause();
+  setTimeout(() => { isApplyingRemote = false; }, 250);
 }
 
 function handleRemoteSeek(message) {
   if (!videoElement) return;
   
   console.log('Crunchyroll Sync: Remote seek command to', message.timestamp);
-  videoElement.currentTime = message.timestamp;
+  isApplyingRemote = true;
+  videoElement.currentTime = message.positionSec ?? message.timestamp ?? videoElement.currentTime;
+  setTimeout(() => { isApplyingRemote = false; }, 250);
 }
 
 function handleSync(message) {
   if (!videoElement) return;
   
   console.log('Crunchyroll Sync: Sync command');
+  isApplyingRemote = true;
   videoElement.currentTime = message.timestamp;
   
   if (message.shouldPlay) {
     videoElement.play().catch(error => {
       console.error('Crunchyroll Sync: Error playing video during sync:', error);
+    }).finally(() => {
+      setTimeout(() => { isApplyingRemote = false; }, 250);
     });
   } else {
     videoElement.pause();
+    setTimeout(() => { isApplyingRemote = false; }, 250);
   }
 }
 
 function sendToBackground(event) {
+  const timestamp = Date.now();
+  
+  // Track this event to avoid receiving it back
+  recentlySentEvents.add(timestamp);
+  
+  // Clean up old timestamps after 5 seconds
+  setTimeout(() => {
+    recentlySentEvents.delete(timestamp);
+  }, 5000);
+  
+  // Add timestamp to event
+  const eventWithTimestamp = {
+    ...event,
+    localSentAt: timestamp
+  };
+  
   chrome.runtime.sendMessage({
     action: 'broadcast',
-    event: event
+    event: eventWithTimestamp
   }).catch(error => {
     console.error('Crunchyroll Sync: Error sending message to background:', error);
   });
@@ -208,165 +256,9 @@ window.crunchyrollSync = {
   isVideoHooked: () => isVideoHooked
 };
 
-// Firebase handling functions
-let firebaseApp = null;
-let firebaseDatabase = null;
-
-async function handleFirebaseAction(message, sendResponse) {
-  try {
-    console.log('Crunchyroll Sync: Handling Firebase action:', message.action);
-    
-    switch (message.action) {
-      case 'firebaseCreateRoom':
-        await handleFirebaseCreateRoom(message, sendResponse);
-        break;
-      case 'firebaseJoinRoom':
-        await handleFirebaseJoinRoom(message, sendResponse);
-        break;
-      case 'firebaseBroadcast':
-        await handleFirebaseBroadcast(message, sendResponse);
-        break;
-      default:
-        console.log('Crunchyroll Sync: Unknown Firebase action:', message.action);
-        sendResponse({ success: false, error: 'Unknown action' });
-    }
-  } catch (error) {
-    console.error('Crunchyroll Sync: Error handling Firebase action:', error);
-    sendResponse({ success: false, error: error.message });
-  }
-}
-
-async function initializeFirebase(firebaseConfig) {
-  if (firebaseApp && firebaseDatabase) {
-    return; // Already initialized
-  }
-  
-  try {
-    console.log('Crunchyroll Sync: Initializing Firebase in content script');
-    
-    // Load Firebase modules using script injection
-    await loadFirebaseModules();
-    
-    // Initialize Firebase
-    firebaseApp = firebase.initializeApp(firebaseConfig);
-    firebaseDatabase = firebaseApp.database();
-    
-    console.log('Crunchyroll Sync: Firebase initialized successfully in content script');
-    
-  } catch (error) {
-    console.error('Crunchyroll Sync: Error initializing Firebase in content script:', error);
-    throw error;
-  }
-}
-
-function loadFirebaseModules() {
-  return new Promise((resolve, reject) => {
-    // Check if Firebase is already loaded
-    if (typeof firebase !== 'undefined') {
-      resolve();
-      return;
-    }
-    
-    // Get the extension URL for local modules
-    const extensionUrl = chrome.runtime.getURL('libs/firebase-app-compat.js');
-    
-    // Load Firebase App
-    const appScript = document.createElement('script');
-    appScript.src = extensionUrl;
-    appScript.onload = () => {
-      // Load Firebase Database
-      const dbScript = document.createElement('script');
-      dbScript.src = chrome.runtime.getURL('libs/firebase-database-compat.js');
-      dbScript.onload = () => {
-        resolve();
-      };
-      dbScript.onerror = () => {
-        reject(new Error('Failed to load Firebase Database module'));
-      };
-      document.head.appendChild(dbScript);
-    };
-    appScript.onerror = () => {
-      reject(new Error('Failed to load Firebase App module'));
-    };
-    document.head.appendChild(appScript);
-  });
-}
-
-async function handleFirebaseCreateRoom(message, sendResponse) {
-  try {
-    await initializeFirebase(message.firebaseConfig);
-    
-    const roomId = message.roomId;
-    const roomRef = firebaseDatabase.ref('rooms/' + roomId);
-    
-    // Set room data
-    await roomRef.set({
-      created: Date.now(),
-      createdBy: 'extension',
-      episodeUrl: window.location.href,
-      lastActivity: Date.now()
-    });
-    
-    console.log('Crunchyroll Sync: Room created in Firebase:', roomId);
-    sendResponse({ success: true, roomId: roomId });
-    
-  } catch (error) {
-    console.error('Crunchyroll Sync: Error creating room in Firebase:', error);
-    sendResponse({ success: false, error: error.message });
-  }
-}
-
-async function handleFirebaseJoinRoom(message, sendResponse) {
-  try {
-    await initializeFirebase(message.firebaseConfig);
-    
-    const roomId = message.roomId;
-    const roomRef = firebaseDatabase.ref('rooms/' + roomId);
-    
-    // Check if room exists
-    const snapshot = await roomRef.once('value');
-    if (!snapshot.exists()) {
-      throw new Error('Room does not exist');
-    }
-    
-    // Update room activity
-    await roomRef.update({
-      lastActivity: Date.now()
-    });
-    
-    console.log('Crunchyroll Sync: Joined room in Firebase:', roomId);
-    sendResponse({ success: true, roomId: roomId });
-    
-  } catch (error) {
-    console.error('Crunchyroll Sync: Error joining room in Firebase:', error);
-    sendResponse({ success: false, error: error.message });
-  }
-}
-
-async function handleFirebaseBroadcast(message, sendResponse) {
-  try {
-    if (!firebaseDatabase) {
-      throw new Error('Firebase not initialized');
-    }
-    
-    const event = message.event;
-    const roomId = message.roomId;
-    
-    // Add timestamp and broadcast to Firebase
-    const eventData = {
-      ...event,
-      timestamp: Date.now(),
-      sentBy: 'extension'
-    };
-    
-    const roomRef = firebaseDatabase.ref('rooms/' + roomId);
-    await roomRef.child('events').push(eventData);
-    
-    console.log('Crunchyroll Sync: Event broadcasted to Firebase:', eventData);
-    sendResponse({ success: true });
-    
-  } catch (error) {
-    console.error('Crunchyroll Sync: Error broadcasting to Firebase:', error);
-    sendResponse({ success: false, error: error.message });
-  }
+// Firebase handling functions removed from content script.
+// All Firebase work is handled by the background service worker using the modular SDK.
+function handleFirebaseAction(message, sendResponse) {
+  console.warn('Crunchyroll Sync: Firebase actions are no longer handled in content script');
+  sendResponse({ success: false, error: 'Unsupported in content script' });
 }

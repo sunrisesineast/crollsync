@@ -12,8 +12,22 @@ document.addEventListener('DOMContentLoaded', function() {
   const signOutBtn = document.getElementById('signOutBtn');
   const authStatus = document.getElementById('authStatus');
   
-  // Load current state and initialize Firebase config
-  loadCurrentState();
+  // Ping background to ensure service worker is alive before doing anything
+  pingBackground().then((ok) => {
+    if (!ok) {
+      console.error('Background not reachable. Try reloading the extension.');
+    }
+    // Load current state and initialize Firebase config
+    loadCurrentState();
+  });
+  async function pingBackground() {
+    try {
+      const res = await chrome.runtime.sendMessage({ action: 'ping' });
+      return !!(res && res.success);
+    } catch (e) {
+      return false;
+    }
+  }
   
   // Event listeners
   createRoomBtn.addEventListener('click', createRoom);

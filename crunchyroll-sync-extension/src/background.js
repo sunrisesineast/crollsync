@@ -1,7 +1,29 @@
 // Background service worker for Crunchyroll Sync Extension
 
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, update, push, onValue, off, get } from 'firebase/database';
+import { getDatabase, ref, set, update, onChildAdded, get, push, off } from 'firebase/database';
+
+// Firebase instances
+let app = null;
+let db = null;
+let currentRoomRef = null;
+let currentRoomId = null;
+let offscreenDocumentId = null;
+
+function ensureFirebaseInitialized() {
+  if (app && db) {
+    return;
+  }
+  try {
+    console.log('Crunchyroll Sync: Initializing Firebase for service worker');
+    app = initializeApp(firebaseConfig);
+    db = getDatabase(app);
+    console.log('Crunchyroll Sync: Firebase initialized successfully for service worker');
+  } catch (error) {
+    console.error('Crunchyroll Sync: Failed to initialize Firebase:', error);
+    throw error;
+  }
+}
 
 console.log('Crunchyroll Sync: Background script loaded');
 
@@ -16,46 +38,26 @@ const firebaseConfig = {
   appId: "1:891082210535:web:53225e1bebc5b5d2e03642"
 };
 
-// Firebase instances
-let app = null;
-let database = null;
-let currentRoomRef = null;
-let currentRoomId = null;
-let offscreenDocumentId = null;
-
 // Initialize Firebase when the service worker starts
 chrome.runtime.onStartup.addListener(() => {
   console.log('Crunchyroll Sync: Service worker started');
-  initializeFirebase();
+  // Firebase will be initialized lazily when needed
 });
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('Crunchyroll Sync: Extension installed');
-  initializeFirebase();
+  // Firebase will be initialized lazily when needed
 });
-
-// Initialize Firebase using ES6 imports (Database only in service worker)
-function initializeFirebase() {
-  console.log('Crunchyroll Sync: Initializing Firebase Database in service worker');
-  
-  try {
-    // Initialize Firebase app
-    app = initializeApp(firebaseConfig);
-    database = getDatabase(app);
-    
-    console.log('Crunchyroll Sync: Firebase Database initialized successfully in service worker');
-    
-  } catch (error) {
-    console.error('Crunchyroll Sync: Error initializing Firebase:', error);
-    console.error('Stack:', error.stack);
-  }
-}
 
 // Listen for messages from popup and content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('Crunchyroll Sync: Background received message:', message);
   
   switch (message.action) {
+    case 'ping':
+      // Just respond without initializing Firebase
+      sendResponse({ success: true, status: 'ok' });
+      break;
     case 'createRoom':
       handleCreateRoom(message, sendResponse);
       break;
@@ -66,7 +68,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleLeaveRoom(message, sendResponse);
       break;
     case 'broadcast':
-      handleBroadcast(message, sendResponse);
+      handleBroadcast(message, sender, sendResponse);
       break;
     case 'signInWithGoogle':
       handleSignInWithGoogle(sendResponse);
@@ -96,29 +98,28 @@ async function handleCreateRoom(message, sendResponse) {
   try {
     const roomId = message.roomId;
     console.log('Crunchyroll Sync: Creating room:', roomId);
-    
-    if (!database) {
-      throw new Error('Firebase not initialized');
-    }
-    
+
+    // Ensure Firebase initialized
+    ensureFirebaseInitialized();
+
     // Create room directly in Firebase
-    const roomRef = ref(database, 'rooms/' + roomId);
-    
+    const roomRef = ref(db, 'rooms/' + roomId);
+
     // Set room data
     await set(roomRef, {
       created: Date.now(),
       createdBy: 'extension',
       lastActivity: Date.now()
     });
-    
+
     // Set up room listener
     currentRoomRef = roomRef;
     currentRoomId = roomId;
-    setupRoomListener(roomRef);
-    
+    await setupRoomListener(roomRef);
+
     console.log('Crunchyroll Sync: Room created successfully:', roomId);
     sendResponse({ success: true, roomId: roomId });
-    
+
   } catch (error) {
     console.error('Crunchyroll Sync: Error creating room:', error);
     sendResponse({ success: false, error: error.message });
@@ -129,32 +130,30 @@ async function handleJoinRoom(message, sendResponse) {
   try {
     const roomId = message.roomId;
     console.log('Crunchyroll Sync: Joining room:', roomId);
-    
-    if (!database) {
-      throw new Error('Firebase not initialized');
-    }
-    
+
+    ensureFirebaseInitialized();
+
     // Check if room exists
-    const roomRef = ref(database, 'rooms/' + roomId);
+    const roomRef = ref(db, 'rooms/' + roomId);
     const snapshot = await get(roomRef);
-    
+
     if (!snapshot.exists()) {
       throw new Error('Room does not exist');
     }
-    
+
     // Update room activity
     await update(roomRef, {
       lastActivity: Date.now()
     });
-    
+
     // Set up room listener
     currentRoomRef = roomRef;
     currentRoomId = roomId;
     setupRoomListener(roomRef);
-    
+
     console.log('Crunchyroll Sync: Joined room successfully:', roomId);
     sendResponse({ success: true, roomId: roomId });
-    
+
   } catch (error) {
     console.error('Crunchyroll Sync: Error joining room:', error);
     sendResponse({ success: false, error: error.message });
@@ -164,82 +163,83 @@ async function handleJoinRoom(message, sendResponse) {
 async function handleLeaveRoom(message, sendResponse) {
   try {
     console.log('Crunchyroll Sync: Leaving room');
-    
+
     if (currentRoomRef) {
       // Remove room listener
-      const eventsRef = ref(database, 'rooms/' + currentRoomId + '/events');
+      const eventsRef = ref(db, 'rooms/' + currentRoomId + '/events');
       off(eventsRef, 'child_added');
       currentRoomRef = null;
       currentRoomId = null;
     }
-    
+
     console.log('Crunchyroll Sync: Left room successfully');
     sendResponse({ success: true });
-    
+
   } catch (error) {
     console.error('Crunchyroll Sync: Error leaving room:', error);
     sendResponse({ success: false, error: error.message });
   }
 }
 
-async function handleBroadcast(message, sendResponse) {
+async function handleBroadcast(message, sender, sendResponse) {
   try {
     if (!currentRoomRef) {
       throw new Error('Not connected to any room');
     }
-    
+
     const event = message.event;
     console.log('Crunchyroll Sync: Broadcasting event:', event);
-    
+
     // Add timestamp and broadcast to Firebase
     const eventData = {
       ...event,
-      timestamp: Date.now(),
-      sentBy: 'extension'
+      sentAtMs: Date.now(),
+      sentBy: 'extension',
+      originTabId: sender && sender.tab ? sender.tab.id : null
     };
-    
-    const eventsRef = ref(database, 'rooms/' + currentRoomId + '/events');
+
+    const eventsRef = ref(db, 'rooms/' + currentRoomId + '/events');
     await push(eventsRef, eventData);
-    
+
     // Update room activity
     await update(currentRoomRef, {
       lastActivity: Date.now()
     });
-    
+
     console.log('Crunchyroll Sync: Event broadcasted successfully');
     sendResponse({ success: true });
-    
+
   } catch (error) {
     console.error('Crunchyroll Sync: Error broadcasting event:', error);
     sendResponse({ success: false, error: error.message });
   }
 }
 
-function setupRoomListener(roomRef) {
+async function setupRoomListener(roomRef) {
   console.log('Crunchyroll Sync: Setting up room listener');
-  
-  // Listen for new events
-  const eventsRef = ref(database, 'rooms/' + currentRoomId + '/events');
-  onValue(eventsRef, (snapshot) => {
-    if (snapshot.exists()) {
-      const events = snapshot.val();
-      // Get the latest event
-      const eventKeys = Object.keys(events);
-      const latestEventKey = eventKeys[eventKeys.length - 1];
-      const event = events[latestEventKey];
-      
+
+  try {
+    // Listen for new events using onChildAdded for real-time updates
+    const eventsRef = ref(db, 'rooms/' + currentRoomId + '/events');
+    onChildAdded(eventsRef, (snapshot) => {
+      const event = snapshot.val();
+
       console.log('Crunchyroll Sync: Received event:', event);
-      
-      // Send event to content script
-      chrome.tabs.query({ url: 'https://www.crunchyroll.com/*' }, (tabs) => {
+
+      // Send event to all Crunchyroll tabs
+      chrome.tabs.query({ url: ['https://*.crunchyroll.com/*', 'https://static.crunchyroll.com/*'] }, (tabs) => {
         tabs.forEach(tab => {
-          chrome.tabs.sendMessage(tab.id, event).catch(error => {
-            console.error('Crunchyroll Sync: Error sending message to tab:', error);
+          // Send to all frames in the tab, including iframes
+          chrome.tabs.sendMessage(tab.id, event, { frameId: undefined }).catch(error => {
+            // Ignore errors - tab might not have content script loaded
+            console.log('Crunchyroll Sync: Tab', tab.id, 'not ready or no content script');
           });
         });
       });
-    }
-  });
+    });
+  } catch (error) {
+    console.error('Crunchyroll Sync: Error setting up room listener:', error);
+  }
 }
 
 // Authentication handlers using offscreen document
@@ -314,7 +314,7 @@ async function handleAuthStateChanged(message, sendResponse) {
     console.log('Crunchyroll Sync: Auth state changed:', message.user ? 'signed in' : 'signed out');
     
     // Send auth state to content scripts
-    chrome.tabs.query({ url: 'https://www.crunchyroll.com/*' }, (tabs) => {
+    chrome.tabs.query({ url: ['https://*.crunchyroll.com/*', 'https://static.crunchyroll.com/*'] }, (tabs) => {
       tabs.forEach(tab => {
         chrome.tabs.sendMessage(tab.id, {
           action: 'authStateChanged',
@@ -335,31 +335,32 @@ async function handleAuthStateChanged(message, sendResponse) {
 
 // Create offscreen document for authentication
 async function createOffscreenDocument() {
+  console.log('Crunchyroll Sync: createOffscreenDocument called');
   try {
     // Check if offscreen document already exists
     const existingContexts = await chrome.runtime.getContexts({
       contextTypes: ['OFFSCREEN_DOCUMENT']
     });
-    
+
     if (existingContexts.length > 0) {
       console.log('Crunchyroll Sync: Offscreen document already exists');
       return;
     }
-    
+
     console.log('Crunchyroll Sync: Creating offscreen document');
-    
+
     // Create offscreen document
     await chrome.offscreen.createDocument({
       url: 'offscreen.html',
-      reasons: ['USER_MEDIA'],
-      justification: 'Authentication popup for Firebase sign-in'
+      reasons: ['IFRAME_SCRIPTING'],
+      justification: 'Authentication UI for Firebase sign-in'
     });
-    
+
     console.log('Crunchyroll Sync: Offscreen document created successfully');
-    
+
   } catch (error) {
     console.error('Crunchyroll Sync: Error creating offscreen document:', error);
-    throw error;
+    // Do not throw to avoid crashing the service worker
   }
 }
 
