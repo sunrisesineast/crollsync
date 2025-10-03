@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Generate Extension Icons</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        button {
+            background: #ff6b35;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #e55a2b;
+        }
+        .icon-preview {
+            display: inline-block;
+            margin: 10px;
+            text-align: center;
+        }
+        canvas {
+            border: 1px solid #ccc;
+            margin: 5px;
+        }
+        .instructions {
+            background: #e8f4fd;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #2196F3;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Crunchyroll Sync Extension Icons</h1>
+        
+        <div class="instructions">
+            <h3>Quick Fix for Extension Loading Error</h3>
+            <p>Click the "Generate All Icons" button below to create the required icon files automatically.</p>
+            <p>This will create simple orange gradient icons with sync arrows.</p>
+        </div>
+
+        <div class="icon-preview">
+            <h3>16x16 Icon</h3>
+            <canvas id="icon16" width="16" height="16"></canvas>
+            <br>
+            <button onclick="downloadIcon('icon16', 'icon16.png')">Download 16x16</button>
+        </div>
+
+        <div class="icon-preview">
+            <h3>48x48 Icon</h3>
+            <canvas id="icon48" width="48" height="48"></canvas>
+            <br>
+            <button onclick="downloadIcon('icon48', 'icon48.png')">Download 48x48</button>
+        </div>
+
+        <div class="icon-preview">
+            <h3>128x128 Icon</h3>
+            <canvas id="icon128" width="128" height="128"></canvas>
+            <br>
+            <button onclick="downloadIcon('icon128', 'icon128.png')">Download 128x128</button>
+        </div>
+
+        <div style="text-align: center; margin-top: 20px;">
+            <button onclick="generateAllIcons()" style="font-size: 16px; padding: 15px 30px;">
+                Generate All Icons
+            </button>
+        </div>
+
+        <div class="instructions" style="margin-top: 20px;">
+            <h3>After Generating Icons:</h3>
+            <ol>
+                <li>Save all three downloaded files to the <code>icons/</code> folder in your extension directory</li>
+                <li>Go to <code>chrome://extensions/</code></li>
+                <li>Click "Load unpacked" and select your extension folder</li>
+                <li>The extension should now load without errors!</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        function createIcon(canvasId, size) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            
+            // Create gradient background
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#ff6b35');
+            gradient.addColorStop(1, '#f7931e');
+            
+            // Draw background
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+            
+            // Add rounded corners effect
+            ctx.globalCompositeOperation = 'destination-in';
+            ctx.beginPath();
+            ctx.roundRect(0, 0, size, size, size * 0.2);
+            ctx.fill();
+            ctx.globalCompositeOperation = 'source-over';
+            
+            // Draw sync symbol (two arrows)
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = Math.max(1, size / 16);
+            ctx.lineCap = 'round';
+            
+            const centerX = size / 2;
+            const centerY = size / 2;
+            const radius = size * 0.3;
+            
+            // First arrow (clockwise)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, -Math.PI/4, Math.PI/4);
+            ctx.stroke();
+            
+            // Arrow head 1
+            ctx.beginPath();
+            ctx.moveTo(centerX + radius * Math.cos(Math.PI/4), centerY + radius * Math.sin(Math.PI/4));
+            ctx.lineTo(centerX + radius * Math.cos(Math.PI/4) - size/8, centerY + radius * Math.sin(Math.PI/4) - size/8);
+            ctx.moveTo(centerX + radius * Math.cos(Math.PI/4), centerY + radius * Math.sin(Math.PI/4));
+            ctx.lineTo(centerX + radius * Math.cos(Math.PI/4) - size/8, centerY + radius * Math.sin(Math.PI/4) + size/8);
+            ctx.stroke();
+            
+            // Second arrow (counter-clockwise)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 3*Math.PI/4, 5*Math.PI/4);
+            ctx.stroke();
+            
+            // Arrow head 2
+            ctx.beginPath();
+            ctx.moveTo(centerX + radius * Math.cos(5*Math.PI/4), centerY + radius * Math.sin(5*Math.PI/4));
+            ctx.lineTo(centerX + radius * Math.cos(5*Math.PI/4) + size/8, centerY + radius * Math.sin(5*Math.PI/4) - size/8);
+            ctx.moveTo(centerX + radius * Math.cos(5*Math.PI/4), centerY + radius * Math.sin(5*Math.PI/4));
+            ctx.lineTo(centerX + radius * Math.cos(5*Math.PI/4) + size/8, centerY + radius * Math.sin(5*Math.PI/4) + size/8);
+            ctx.stroke();
+        }
+        
+        function downloadIcon(canvasId, filename) {
+            const canvas = document.getElementById(canvasId);
+            const link = document.createElement('a');
+            link.download = filename;
+            link.href = canvas.toDataURL();
+            link.click();
+        }
+        
+        function generateAllIcons() {
+            // Generate all icons
+            createIcon('icon16', 16);
+            createIcon('icon48', 48);
+            createIcon('icon128', 128);
+            
+            // Auto-download all
+            setTimeout(() => downloadIcon('icon16', 'icon16.png'), 100);
+            setTimeout(() => downloadIcon('icon48', 'icon48.png'), 200);
+            setTimeout(() => downloadIcon('icon128', 'icon128.png'), 300);
+            
+            alert('All icons generated! Check your downloads folder and move them to the icons/ folder in your extension directory.');
+        }
+        
+        // Generate icons on page load
+        window.onload = function() {
+            createIcon('icon16', 16);
+            createIcon('icon48', 48);
+            createIcon('icon128', 128);
+        };
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Firebase Test</title>
+</head>
+<body>
+    <h1>Firebase Test</h1>
+    <div id="status">Testing Firebase initialization...</div>
+    
+    <script src="libs/firebase-app-compat.js"></script>
+    <script src="libs/firebase-database-compat.js"></script>
+    <script>
+        console.log('Testing Firebase initialization...');
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyBPEckKjp8aFmX58uos3MaK873RGuL30Nc",
+            authDomain: "crunchysync-fe757.firebaseapp.com",
+            databaseURL: "https://crunchysync-fe757-default-rtdb.firebaseio.com",
+            projectId: "crunchysync-fe757",
+            storageBucket: "crunchysync-fe757.firebasestorage.app",
+            messagingSenderId: "891082210535",
+            appId: "1:891082210535:web:53225e1bebc5b5d2e03642"
+        };
+        
+        try {
+            console.log('Initializing Firebase...');
+            const app = firebase.initializeApp(firebaseConfig);
+            const database = firebase.database();
+            
+            console.log('Firebase initialized successfully!');
+            document.getElementById('status').innerHTML = '✅ Firebase initialized successfully!';
+            
+            // Test database connection
+            database.ref('test').set({
+                message: 'Hello from Firebase test',
+                timestamp: Date.now()
+            }).then(() => {
+                console.log('Database write successful!');
+                document.getElementById('status').innerHTML += '<br>✅ Database write successful!';
+            }).catch(error => {
+                console.error('Database write failed:', error);
+                document.getElementById('status').innerHTML += '<br>❌ Database write failed: ' + error.message;
+            });
+            
+        } catch (error) {
+            console.error('Firebase initialization failed:', error);
+            document.getElementById('status').innerHTML = '❌ Firebase initialization failed: ' + error.message;
+        }
+    </script>
+</body>
+</html>
